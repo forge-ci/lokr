@@ -1,0 +1,15 @@
+[package]
+name = "lokr"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95.0"
+description = "Local secrets catalog for AI agents: shows which keys exist and where, never their values."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/zackees/lokr"
+authors = ["Zach Vorhies"]
+
+[dependencies]
+kernal-api = { version = "=0.1.40", default-features = false, features = ["json"] }
+
+[workspace]
