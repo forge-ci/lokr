@@ -10,13 +10,12 @@ repository = "https://github.com/forge-ci/lokr"
 authors = ["Zach Vorhies"]
 
 [dependencies]
-kernal-api = { version = "=0.1.40", default-features = false, features = ["json"] }
+kernal-api = { version = "=0.1.41", default-features = false, features = ["json", "gfx-egui"] }
 
 regex = "1"
 zeroize = "1"
 rpassword = "7"
 tempfile = "3"
-eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 
 [profile.release]
@@ -25,3 +24,6 @@ lto = "thin"
 strip = true
 
 [workspace]
+
+[patch.crates-io]
+kernal-api = { path = "../kernal-api" }

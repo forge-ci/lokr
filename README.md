@@ -89,10 +89,11 @@ name-only request API is rejected.
 
 ### UI and tests
 
-The native window uses egui/eframe with the OpenGL renderer; default features,
-WebGPU and persistence are disabled to limit binary size and avoid saving input.
-Release builds use size optimization, thin LTO and stripped symbols. A small
-custom masked editor avoids egui TextEdit's plaintext undo snapshots. The public
+The native window uses `kernal_api::gfx` with its `gfx-egui` backend (wgpu).
+The facade owns the window and secure masked input; lokr has no direct GUI
+backend dependency.
+Release builds use size optimization, thin LTO and stripped symbols. The facade
+masked editor avoids plaintext undo snapshots. The public
 `Prompt` trait lets tests provide fake input without starting an event loop.
 
 Tests must never open dialogs, read a terminal or unlock a keyring. Real UI and

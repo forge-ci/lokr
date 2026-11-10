@@ -281,3 +281,14 @@ fn lowercase_service_title_is_specific_with_an_explanatory_message() {
     ])
     .is_ok());
 }
+
+#[test]
+fn native_ui_uses_only_the_secure_gfx_facade() {
+    let manifest = include_str!("../Cargo.toml");
+    assert!(!manifest.lines().any(|line| line.starts_with("eframe =")));
+    assert!(manifest.contains("\"gfx-egui\""));
+    let source = include_str!("../src/request_ui.rs");
+    assert!(source.contains("kernal_api::gfx"));
+    assert!(source.contains("secret_field("));
+    assert!(!source.contains("eframe::"));
+}
