@@ -3,6 +3,14 @@ use std::ffi::OsString;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = args.first().map(String::as_str).unwrap_or("");
+    if command == "request" {
+        let status = match lokr::request::Request::parse(args.into_iter().skip(1).collect()) {
+            Ok(request) => lokr::request::execute(&request, &mut lokr::request_ui::SystemPrompt),
+            Err(_) => lokr::request::Status::Failed,
+        };
+        println!("{}", status.as_str());
+        std::process::exit(status.code());
+    }
     let result = match command {
         "scan" => {
             let catalog = lokr::scan();
@@ -23,12 +31,17 @@ fn main() {
                 .unwrap_or_else(|_| "lokr".into());
             lokr::serve_stdio(&lokr::ServerOptions {
                 daemon_command: vec![exe, "daemon".into()],
-                ask_command: Vec::new(),
+                ask_command: vec![
+                    std::env::current_exe()
+                        .unwrap_or_else(|_| "lokr".into())
+                        .into_os_string(),
+                    "request".into(),
+                ],
             })
         }
         "daemon" => lokr::run_daemon(),
         _ => {
-            eprintln!("usage: lokr <scan|list [query]|mcp|daemon>");
+            eprintln!("usage: lokr <scan|list [query]|mcp|daemon|request>");
             std::process::exit(2);
         }
     };

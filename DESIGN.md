@@ -10,11 +10,13 @@ a host ask the user for a missing one. It never hands a value to the agent.
    `publish = false` and are amalgamated into the single `lokr` crate at release,
    following zccache's `ci/publish_amalgamate.py`. Until a split earns its cost,
    modules in one crate are the simplest way to meet this.
-2. **`kernal-api` is the only dependency.** No other crate may appear in
-   `[dependencies]`, including optional or target-specific entries. Pin it
-   exactly (`=x.y.z`), as kernal-api requires below 1.0. Capabilities come from
-   kernal-api features or `std`; if kernal-api lacks one, add it there. A guard
-   test enforces this.
+2. **Keep dependencies focused.** `kernal-api` remains exactly pinned for JSON.
+   The built-in request bar adds eframe/egui (OpenGL only, without persistence),
+   regex, zeroize, rpassword, tempfile and keyring for native input and safe
+   delivery. This replaces the original catalog-only single-dependency rule:
+   the request bar needs explicit control over masked input, undo state,
+   zeroization, validation and native credential stores. Keep it in one crate;
+   do not pull in a browser runtime or WebGPU for this window.
 3. **No route returns a value.** There is no `get_secret`. Scans read values only
    to skip empty ones, and the catalog stores names and locations.
 
@@ -39,11 +41,22 @@ appear in tool arguments, tool results, logs or prompts.
 
 ## Asking for secrets
 
-`request_secret` runs the host's prompt and returns only `stored`, `failed` or
-`cancelled`. The prompt delivers the value straight to its sink, so the value
-never passes through lokr or the model. clud supplies its cross-platform
-`clud secret` window today. Moving that prompt into lokr, built on kernal-api's
-windowing features, is the planned path to one shared library.
+`request_secret(title, message, sink, hint?, pattern?)` validates specific
+context, runs a separate `lokr request` process, discards its output, and returns
+only `stored`, `failed` or `cancelled` from the exit code. The request process
+collects masked input and delivers it directly to a private file, native keyring,
+or command stdin. Only metadata is recorded. The model never receives a value.
+The CLI enables this tool automatically; library hosts may configure another
+compatible command prefix or disable it with an empty prefix.
+
+The native window shows the large title, explanation, hint, actual requesting
+process identity and permanent warning: "This is NOT your computer or login
+password." A custom bullet-only editor avoids plaintext undo snapshots. The
+same validation supports a masked controlling-terminal fallback. `Prompt` is
+injected for tests, with no real dialogs, terminals or keyring prompts allowed.
+`LOKR_TEST_MODE` and test executable detection fail closed at real UI, keyring
+and prompt-subprocess boundaries. Regexes match fully; three invalid submissions
+fail. Credential buffers are zeroized after delivery, cancellation or rejection.
 
 ## Host integration
 
@@ -55,6 +68,8 @@ appends a system prompt naming the routes. Without the flag, nothing runs.
 - An agent with shell access under the same account can read these locations
   itself. lokr prevents accidental exposure; it is not a sandbox.
 - Process scanning is Linux-only so far. macOS and Windows see the other sources.
-- Keyring entries cannot be enumerated, so only known entries are probed.
+- Legacy Python keyring probing can trigger an unlock dialog, so it is disabled
+  by default and always in tests. `LOKR_SCAN_KEYRING=1` explicitly opts in to
+  probing known entries; new request registrations need no keyring reads.
 - Process spawning still uses `std::process`. It should move to kernal-api's
   `spawn_sync` once the kernal-api boundary Dylint is adopted here.

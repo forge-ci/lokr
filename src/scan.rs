@@ -5,7 +5,13 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const SUFFIXES: [&str; 7] = [
-    "_API_KEY", "_APIKEY", "_TOKEN", "_SECRET", "_SECRET_KEY", "_ACCESS_KEY", "_PASSWORD",
+    "_API_KEY",
+    "_APIKEY",
+    "_TOKEN",
+    "_SECRET",
+    "_SECRET_KEY",
+    "_ACCESS_KEY",
+    "_PASSWORD",
 ];
 const KEYRING_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -25,8 +31,12 @@ const KEYRING_ENTRIES: [(&str, &str, &str); 1] =
 /// Does this environment variable name look like a credential?
 pub fn is_secret_name(name: &str) -> bool {
     !name.is_empty()
-        && name.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-        && SUFFIXES.iter().any(|suffix| name.ends_with(suffix) && name.len() > suffix.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        && SUFFIXES
+            .iter()
+            .any(|suffix| name.ends_with(suffix) && name.len() > suffix.len())
 }
 
 /// Names of non-empty secrets in `KEY=value` lines. Values are not kept.
@@ -73,7 +83,11 @@ pub fn scan() -> Vec<Entry> {
         for (name, relative) in CREDENTIAL_FILES {
             let path = home.join(relative);
             if path.metadata().is_ok_and(|meta| meta.len() > 0) {
-                add(name.to_string(), "credential_file", path.display().to_string());
+                add(
+                    name.to_string(),
+                    "credential_file",
+                    path.display().to_string(),
+                );
             }
         }
     }
@@ -82,26 +96,40 @@ pub fn scan() -> Vec<Entry> {
             add(name.to_string(), "keyring", format!("{service} / {user}"));
         }
     }
+    for entry in crate::request::recorded() {
+        add(entry.name, entry.kind, entry.location);
+    }
     found
         .into_iter()
-        .map(|(name, kind, location)| Entry { name, kind, location })
+        .map(|(name, kind, location)| Entry {
+            name,
+            kind,
+            location,
+        })
         .collect()
 }
 
 #[cfg(target_os = "linux")]
 fn scan_processes(add: &mut impl FnMut(String, &'static str, String)) {
-    let Ok(dir) = std::fs::read_dir("/proc") else { return };
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return;
+    };
     let me = std::process::id().to_string();
     for entry in dir.flatten() {
         let pid = entry.file_name();
-        let Some(pid) = pid.to_str().filter(|p| p.bytes().all(|b| b.is_ascii_digit())) else {
+        let Some(pid) = pid
+            .to_str()
+            .filter(|p| p.bytes().all(|b| b.is_ascii_digit()))
+        else {
             continue;
         };
         if pid == me {
             continue;
         }
         // Readable only for processes of this same user.
-        let Ok(environ) = std::fs::read(entry.path().join("environ")) else { continue };
+        let Ok(environ) = std::fs::read(entry.path().join("environ")) else {
+            continue;
+        };
         let names: Vec<String> = environ
             .split(|byte| *byte == 0)
             .filter_map(|pair| {
@@ -134,13 +162,19 @@ fn home() -> Option<PathBuf> {
 fn dotenv_files(home: &Path) -> Vec<PathBuf> {
     let mut files = vec![home.join(".env")];
     for entry in children(home) {
-        if entry.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+        if entry
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+        {
             files.push(entry.join(".env"));
         }
     }
     for tool in children(&home.join(".config")) {
         for file in children(&tool) {
-            if file.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".env")) {
+            if file
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(".env"))
+            {
                 files.push(file);
             }
         }
@@ -156,6 +190,13 @@ fn children(dir: &Path) -> Vec<PathBuf> {
 
 /// Asks the `keyring` CLI, discarding the value. A hang counts as absent.
 fn keyring_has(service: &str, user: &str) -> bool {
+    // Python keyring backends may open unlock dialogs. Never probe during normal
+    // catalog scans or tests: an explicit interactive opt-in is required.
+    if crate::request::interaction_disabled()
+        || std::env::var_os("LOKR_SCAN_KEYRING").as_deref() != Some(std::ffi::OsStr::new("1"))
+    {
+        return false;
+    }
     let mut candidates = vec![PathBuf::from("keyring")];
     if let Some(home) = home() {
         candidates.push(home.join(".venv/bin/keyring"));
