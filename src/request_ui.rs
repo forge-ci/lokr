@@ -23,7 +23,7 @@ impl Prompt for SystemPrompt {
         let validation = Validation::new(request.pattern.as_deref())?;
         let options = WindowOptions::new("lokr — credential request")
             .size(660.0, 540.0)
-            .resizable(false);
+            .resizable(true);
         let result = gfx::run(
             options,
             Window {
@@ -99,6 +99,7 @@ impl App for Window {
                 frame.close();
             } else {
                 frame.clear_keyboard_focus();
+                frame.request_repaint();
             }
         }
         if frame.button("Cancel") {

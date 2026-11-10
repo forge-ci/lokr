@@ -89,6 +89,10 @@ name-only request API is rejected.
 
 ### UI and tests
 
+`lokr --version` prints the compiled version. `lokr --dry-run` prints
+`{"status":"ok","version":"0.1.0","interactive":false}` and exits without
+scanning, starting MCP, writing state, opening a window, or prompting.
+
 The native window uses `kernal_api::gfx` with its `gfx-egui` backend (wgpu).
 The facade owns the window and secure masked input; lokr has no direct GUI
 backend dependency.
@@ -109,3 +113,25 @@ Never manually invoke a real credential request as a test. The test suite uses
 fake input, temporary files and harmless command sinks, and covers context
 validation, full regex matching, retry limits, cancellation, permissions,
 command stdin delivery, and metadata-only registration.
+
+### Native release artifacts
+
+Functional releases are published at
+`https://github.com/forge-ci/lokr/releases/download/v0.1.0/`.
+Each executable is a raw `lokr-<Rust target>` asset (`.exe` on Windows), with
+`SHA256SUMS` and `lokr-artifacts.json` recording its SHA256 and exact byte size.
+The manifest also records the source commit. Targets are Linux x64/ARM64 with
+both musl and GNU libc, macOS x64/ARM64, and Windows x64/ARM64.
+
+Use the static musl executable for loader-independent Linux/NixOS startup.
+GNU builds require the host's GNU loader and native graphics libraries.
+Requests retain the controlling-terminal fallback when graphics are unavailable.
+Verification uses `--version` and `--dry-run`, with no windows or prompts.
+
+From a clean checkout using registry dependencies, build the release matrix with:
+
+```sh
+uv run --no-project --python 3.12 python tools/release.py
+```
+
+Assets are written to `dist/v0.1.0/`. Windows builds use the static C runtime.
