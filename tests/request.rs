@@ -84,6 +84,9 @@ fn polite_generic_requests_are_rejected() {
         "Please enter your password now",
         "Enter the requested credential below",
         "Please provide a secret value",
+        "Please enter your password again",
+        "Enter the requested credential securely",
+        "Please enter your password again again",
     ] {
         assert!(Request::parse(vec![
             "--title".into(),
@@ -264,4 +267,17 @@ fn file_sink_replaces_a_symlink_without_writing_its_target() {
         .file_type()
         .is_symlink());
     assert!(std::fs::read(target).unwrap() == b"original");
+}
+
+#[test]
+fn lowercase_service_title_is_specific_with_an_explanatory_message() {
+    assert!(Request::parse(vec![
+        "--title".into(),
+        "github api key".into(),
+        "--message".into(),
+        "Needed for GitHub OAuth; find it in developer settings".into(),
+        "--to-file".into(),
+        "unused".into()
+    ])
+    .is_ok());
 }

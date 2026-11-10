@@ -47,7 +47,7 @@ pub struct Request {
     pub requester: String,
 }
 
-fn meaningful(value: &str) -> bool {
+fn meaningful(value: &str, title: bool) -> bool {
     let words: Vec<String> = value
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| !s.is_empty())
@@ -102,16 +102,62 @@ fn meaningful(value: &str) -> bool {
         "me",
         "us",
         "you",
+        "again",
+        "securely",
+        "safely",
+        "carefully",
+        "correctly",
+        "very",
+        "just",
+        "only",
+        "new",
+        "valid",
+        "real",
+        "proper",
+        "necessary",
+        "appropriate",
+        "requested",
+        "please",
+        "type",
+        "supply",
+        "fill",
+        "submit",
+        "on",
+        "of",
+        "with",
+        "from",
+        "at",
+        "in",
+        "by",
+        "my",
+        "our",
+        "their",
+        "page",
+        "form",
+        "field",
+        "box",
+        "dialog",
+        "client",
+        "id",
     ];
-    words.len() >= 3
-        && words.iter().any(|w| !generic.contains(&w.as_str()))
+    let specific: std::collections::BTreeSet<_> = words
+        .iter()
+        .filter(|w| !generic.contains(&w.as_str()) && !w.ends_with("ly"))
+        .collect();
+    let imperative = words.first().is_some_and(|w| {
+        ["please", "enter", "provide", "type", "input", "supply"].contains(&w.as_str())
+    });
+    // A title may name one service ("github api key"). Generic imperative
+    // templates and explanatory messages need at least two distinct context words.
+    words.len() >= 2
+        && specific.len() >= if title && !imperative { 1 } else { 2 }
         && value.len() <= 4096
         && !value.chars().any(|c| c.is_control() && c != '\n')
 }
 
 impl Request {
     pub fn validate(&self) -> Result<(), RequestError> {
-        if !meaningful(&self.title) || !meaningful(&self.message) {
+        if !meaningful(&self.title, true) || !meaningful(&self.message, false) {
             return Err(RequestError);
         }
         Validation::new(self.pattern.as_deref())?;

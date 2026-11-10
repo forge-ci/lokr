@@ -102,23 +102,34 @@ impl eframe::App for Window {
                 .chars()
                 .map(|c| if c == '\n' { '\n' } else { '•' })
                 .collect();
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            let field = egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_min_size(egui::vec2(
                     ui.available_width(),
                     if self.request.multiline { 90.0 } else { 28.0 },
                 ));
                 ui.label(egui::RichText::new(masked).monospace());
             });
-            ui.small(
-                "Type or paste here. Backspace deletes; no reveal, copy or undo. Escape cancels.",
+            let input_response = ui.interact(
+                field.response.rect,
+                egui::Id::new("masked-input"),
+                egui::Sense::click(),
             );
+            if input_response.clicked() || ctx.memory(|memory| memory.focused().is_none()) {
+                input_response.request_focus();
+            }
+            let focused = input_response.has_focus();
+            ui.small(if focused {
+                "Type or paste here. Backspace deletes; no reveal, copy or undo. Escape cancels."
+            } else {
+                "Click the masked field to type or paste."
+            });
             ctx.input_mut(|input| {
                 for event in &mut input.events {
                     match event {
                         egui::Event::Text(text)
                         | egui::Event::Paste(text)
                         | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
-                            if self.value.len() + text.len() <= 65536 {
+                            if focused && self.value.len() + text.len() <= 65536 {
                                 for c in text.chars() {
                                     if !c.is_control() || (c == '\n' && self.request.multiline) {
                                         self.value.push(c);
@@ -127,13 +138,16 @@ impl eframe::App for Window {
                             }
                             text.zeroize();
                         }
+                        egui::Event::Ime(egui::ImeEvent::Preedit(text)) => text.zeroize(),
                         egui::Event::Key {
                             key: egui::Key::Backspace,
                             pressed: true,
                             ..
                         } => {
                             // Erase removed bytes as well as shortening the string.
-                            if let Some((index, _)) = self.value.char_indices().last() {
+                            if let Some((index, _)) =
+                                self.value.char_indices().last().filter(|_| focused)
+                            {
                                 let mut bytes = Zeroizing::new(self.value.as_bytes().to_vec());
                                 bytes[index..].zeroize();
                                 self.value.zeroize();
@@ -145,7 +159,7 @@ impl eframe::App for Window {
                             key: egui::Key::Enter,
                             pressed: true,
                             ..
-                        } if self.request.multiline && self.value.len() < 65536 => {
+                        } if focused && self.request.multiline && self.value.len() < 65536 => {
                             self.value.push('\n')
                         }
                         egui::Event::Key {
@@ -156,10 +170,24 @@ impl eframe::App for Window {
                         _ => {}
                     }
                 }
+                // The focused editor owns these keys; they must not activate a
+                // button in the same frame, including after a rejected submission.
+                if focused {
+                    input.events.retain(|event| {
+                        !matches!(
+                            event,
+                            egui::Event::Key {
+                                key: egui::Key::Enter | egui::Key::Space | egui::Key::Backspace,
+                                ..
+                            }
+                        )
+                    });
+                }
                 for event in &mut input.raw.events {
                     if let egui::Event::Text(text)
                     | egui::Event::Paste(text)
-                    | egui::Event::Ime(egui::ImeEvent::Commit(text)) = event
+                    | egui::Event::Ime(egui::ImeEvent::Commit(text))
+                    | egui::Event::Ime(egui::ImeEvent::Preedit(text)) = event
                     {
                         text.zeroize();
                     }
@@ -181,6 +209,7 @@ impl eframe::App for Window {
                     } else {
                         self.value.zeroize();
                         self.error = true;
+                        input_response.request_focus();
                         if self.validation.exhausted() {
                             if let Ok(mut output) = self.output.lock() {
                                 *output = Err(RequestError);
