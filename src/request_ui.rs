@@ -1,6 +1,6 @@
 //! Native masked window and controlling-terminal fallback.
 use crate::request::{Prompt, Request, RequestError, Validation, FORMAT_ERROR, WARNING};
-use eframe::egui;
+use kernal_api::gfx::{self, App, Event, Frame, Key, WindowOptions};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use zeroize::{Zeroize, Zeroizing};
@@ -21,25 +21,18 @@ impl Prompt for SystemPrompt {
         let fallback_request = request.clone();
         let request = request.clone();
         let validation = Validation::new(request.pattern.as_deref())?;
-        let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_title("lokr — credential request")
-                .with_inner_size([660.0, 440.0])
-                .with_min_inner_size([600.0, 400.0]),
-            ..Default::default()
-        };
-        let result = eframe::run_native(
-            "lokr",
+        let options = WindowOptions::new("lokr — credential request")
+            .size(660.0, 540.0)
+            .resizable(true);
+        let result = gfx::run(
             options,
-            Box::new(move |_| {
-                Ok(Box::new(Window {
-                    request,
-                    validation,
-                    value: Zeroizing::new(String::with_capacity(65536)),
-                    error: false,
-                    output: shared,
-                }))
-            }),
+            Window {
+                request,
+                validation,
+                value: Zeroizing::new(String::with_capacity(65536)),
+                error: false,
+                output: shared,
+            },
         );
         if result.is_err() {
             let mut validation = Validation::new(fallback_request.pattern.as_deref())?;
@@ -66,163 +59,81 @@ struct Window {
     error: bool,
     output: Arc<Mutex<Answer>>,
 }
-impl eframe::App for Window {
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        egui::TopBottomPanel::bottom("permanent-warning").show(ctx, |ui| {
-            ui.colored_label(
-                egui::Color32::from_rgb(210, 65, 35),
-                egui::RichText::new(WARNING).strong(),
-            );
-        });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading(egui::RichText::new(&self.request.title).size(28.0));
-            egui::ScrollArea::vertical()
-                .max_height(120.0)
-                .show(ui, |ui| {
-                    ui.label(&self.request.message);
-                });
-            if let Some(hint) = &self.request.hint {
-                ui.label(format!("Expected format: {hint}"));
-            }
-            if let Some(pattern) = &self.request.pattern {
-                ui.label(format!("Must fully match: {pattern}"));
-            }
-            ui.label(format!("Requesting process: {}", self.request.requester));
-            ui.separator();
-            ui.colored_label(
-                egui::Color32::from_rgb(210, 65, 35),
-                egui::RichText::new(WARNING).strong(),
-            );
-            ui.separator();
-            // The ordinary egui TextEdit stores plaintext undo snapshots even in
-            // password mode. Keep only bullets in widgets; edit the zeroizing buffer
-            // directly, with no undo, copy, accessibility text or reveal control.
-            let masked: String = self
-                .value
-                .chars()
-                .map(|c| if c == '\n' { '\n' } else { '•' })
-                .collect();
-            let field = egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_min_size(egui::vec2(
-                    ui.available_width(),
-                    if self.request.multiline { 90.0 } else { 28.0 },
-                ));
-                ui.label(egui::RichText::new(masked).monospace());
-            });
-            let input_response = ui.interact(
-                field.response.rect,
-                egui::Id::new("masked-input"),
-                egui::Sense::click(),
-            );
-            if input_response.clicked() || ctx.memory(|memory| memory.focused().is_none()) {
-                input_response.request_focus();
-            }
-            let focused = input_response.has_focus();
-            ui.small(if focused {
-                "Type or paste here. Backspace deletes; no reveal, copy or undo. Escape cancels."
+impl App for Window {
+    fn frame(&mut self, frame: &mut Frame<'_>) {
+        // Keep the fixed warning visible even with unusually long request context.
+        frame.heading(WARNING);
+        frame.heading(&self.request.title);
+        frame.scroll(120.0, |frame| frame.label(&self.request.message));
+        if let Some(hint) = &self.request.hint {
+            frame.label(&format!("Expected format: {hint}"));
+        }
+        if let Some(pattern) = &self.request.pattern {
+            frame.label(&format!("Must fully match: {pattern}"));
+        }
+        frame.label(&format!("Requesting process: {}", self.request.requester));
+        frame.separator();
+        frame.secret_field(&mut self.value, self.request.multiline);
+        frame.label(
+            "Type or paste here. Backspace deletes; no reveal, copy or undo. Escape cancels.",
+        );
+        if frame.events().iter().any(|event| {
+            matches!(
+                event,
+                Event::Key {
+                    key: Key::Escape,
+                    pressed: true,
+                    ..
+                }
+            )
+        }) {
+            self.value.zeroize();
+            frame.close();
+            return;
+        }
+        if self.error {
+            frame.label(FORMAT_ERROR);
+        }
+        if frame.button("Store credential") {
+            if self.submit() {
+                frame.close();
             } else {
-                "Click the masked field to type or paste."
-            });
-            ctx.input_mut(|input| {
-                for event in &mut input.events {
-                    match event {
-                        egui::Event::Text(text)
-                        | egui::Event::Paste(text)
-                        | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
-                            if focused && self.value.len() + text.len() <= 65536 {
-                                for c in text.chars() {
-                                    if !c.is_control() || (c == '\n' && self.request.multiline) {
-                                        self.value.push(c);
-                                    }
-                                }
-                            }
-                            text.zeroize();
-                        }
-                        egui::Event::Ime(egui::ImeEvent::Preedit(text)) => text.zeroize(),
-                        egui::Event::Key {
-                            key: egui::Key::Backspace,
-                            pressed: true,
-                            ..
-                        } => {
-                            // Erase removed bytes as well as shortening the string.
-                            if let Some((index, _)) =
-                                self.value.char_indices().last().filter(|_| focused)
-                            {
-                                let mut bytes = Zeroizing::new(self.value.as_bytes().to_vec());
-                                bytes[index..].zeroize();
-                                self.value.zeroize();
-                                self.value
-                                    .push_str(std::str::from_utf8(&bytes[..index]).unwrap_or(""));
-                            }
-                        }
-                        egui::Event::Key {
-                            key: egui::Key::Enter,
-                            pressed: true,
-                            ..
-                        } if focused && self.request.multiline && self.value.len() < 65536 => {
-                            self.value.push('\n')
-                        }
-                        egui::Event::Key {
-                            key: egui::Key::Escape,
-                            pressed: true,
-                            ..
-                        } => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                        _ => {}
-                    }
-                }
-                // The focused editor owns these keys; they must not activate a
-                // button in the same frame, including after a rejected submission.
-                if focused {
-                    input.events.retain(|event| {
-                        !matches!(
-                            event,
-                            egui::Event::Key {
-                                key: egui::Key::Enter | egui::Key::Space | egui::Key::Backspace,
-                                ..
-                            }
-                        )
-                    });
-                }
-                for event in &mut input.raw.events {
-                    if let egui::Event::Text(text)
-                    | egui::Event::Paste(text)
-                    | egui::Event::Ime(egui::ImeEvent::Commit(text))
-                    | egui::Event::Ime(egui::ImeEvent::Preedit(text)) = event
-                    {
-                        text.zeroize();
-                    }
-                }
-            });
-            if self.error {
-                ui.colored_label(egui::Color32::RED, FORMAT_ERROR);
+                frame.clear_keyboard_focus();
+                frame.request_repaint();
             }
-            ui.horizontal(|ui| {
-                if ui.button("Store credential").clicked() {
-                    if self.validation.accept(&self.value) {
-                        if let Ok(mut output) = self.output.lock() {
-                            *output = Ok(Some(std::mem::replace(
-                                &mut self.value,
-                                Zeroizing::new(String::with_capacity(65536)),
-                            )));
-                        }
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    } else {
-                        self.value.zeroize();
-                        self.error = true;
-                        input_response.request_focus();
-                        if self.validation.exhausted() {
-                            if let Ok(mut output) = self.output.lock() {
-                                *output = Err(RequestError);
-                            }
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                    }
+        }
+        if frame.button("Cancel") {
+            self.value.zeroize();
+            frame.close();
+        }
+        frame.separator();
+        frame.label(WARNING);
+    }
+}
+
+impl Window {
+    // Return true only when the request has a final result.
+    fn submit(&mut self) -> bool {
+        if self.validation.accept(&self.value) {
+            if let Ok(mut output) = self.output.lock() {
+                *output = Ok(Some(std::mem::replace(
+                    &mut self.value,
+                    Zeroizing::new(String::with_capacity(65536)),
+                )));
+            }
+            true
+        } else {
+            self.value.zeroize();
+            self.error = true;
+            if self.validation.exhausted() {
+                if let Ok(mut output) = self.output.lock() {
+                    *output = Err(RequestError);
                 }
-                if ui.button("Cancel").clicked() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            });
-        });
+                true
+            } else {
+                false
+            }
+        }
     }
 }
 

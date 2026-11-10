@@ -3,6 +3,17 @@ use std::ffi::OsString;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = args.first().map(String::as_str).unwrap_or("");
+    if matches!(command, "--version" | "-V") {
+        println!("lokr {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if command == "--dry-run" {
+        println!(
+            "{{\"status\":\"ok\",\"version\":\"{}\",\"interactive\":false}}",
+            env!("CARGO_PKG_VERSION")
+        );
+        return;
+    }
     if command == "request" {
         let status = match lokr::request::Request::parse(args.into_iter().skip(1).collect()) {
             Ok(request) => lokr::request::execute(&request, &mut lokr::request_ui::SystemPrompt),
@@ -41,7 +52,7 @@ fn main() {
         }
         "daemon" => lokr::run_daemon(),
         _ => {
-            eprintln!("usage: lokr <scan|list [query]|mcp|daemon|request>");
+            eprintln!("usage: lokr <scan|list [query]|mcp|daemon|request|--version|--dry-run>");
             std::process::exit(2);
         }
     };

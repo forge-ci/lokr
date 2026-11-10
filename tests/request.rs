@@ -281,3 +281,38 @@ fn lowercase_service_title_is_specific_with_an_explanatory_message() {
     ])
     .is_ok());
 }
+
+#[test]
+fn gui_backend_dependency_is_owned_by_kernal_api() {
+    let manifest = include_str!("../Cargo.toml");
+    assert!(!manifest.lines().any(|line| line.starts_with("eframe =")));
+    assert!(manifest.contains("\"gfx-egui\""));
+}
+
+#[test]
+fn verification_commands_never_start_interaction_or_write_state() {
+    let directory = tempfile::tempdir().unwrap();
+    for (argument, expected) in [
+        ("--version", format!("lokr {}\n", env!("CARGO_PKG_VERSION"))),
+        (
+            "--dry-run",
+            format!(
+                "{{\"status\":\"ok\",\"version\":\"{}\",\"interactive\":false}}\n",
+                env!("CARGO_PKG_VERSION")
+            ),
+        ),
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_lokr"))
+            .arg(argument)
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env("LOKR_TEST_MODE", "1")
+            .env("LOKR_HOME", directory.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+        assert!(output.stderr.is_empty());
+        assert!(directory.path().read_dir().unwrap().next().is_none());
+    }
+}
