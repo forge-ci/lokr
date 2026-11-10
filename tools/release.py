@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """Run a checked command from the repository, suppressing Windows consoles."""
     return subprocess.run(
         command,
         cwd=ROOT,
@@ -63,6 +64,7 @@ def verify_native(binary: Path, version: str) -> None:
 
 
 def native_verifiable(target: str) -> bool:
+    """Select host-native smoke tests that need no foreign runtime loader."""
     architecture = platform.machine().lower()
     machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(architecture, architecture)
     suffix = {
@@ -97,6 +99,7 @@ def verify_linux_linkage(binary: Path, target: str) -> None:
 
 
 def build(target: str, output: Path, version: str) -> dict:
+    """Build and inspect a raw executable and return its checksum record."""
     environment = os.environ.copy()
     environment.pop("DISPLAY", None)
     environment.pop("WAYLAND_DISPLAY", None)
@@ -130,6 +133,7 @@ def build(target: str, output: Path, version: str) -> dict:
 
 
 def main() -> None:
+    """Build a clean registry-based checkout into the selected release matrix."""
     manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
     version = manifest["package"]["version"]
     targets = manifest["workspace"]["metadata"]["soldr"]["targets"]
