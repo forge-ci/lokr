@@ -42,11 +42,16 @@ fn write_private(path: &PathBuf, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 fn write_catalog(entries: &[Entry]) -> std::io::Result<()> {
-    let document = object([("scanned_at", Value::Unsigned(now())), ("secrets", catalog_json(entries))]);
+    let document = object([
+        ("scanned_at", Value::Unsigned(now())),
+        ("secrets", catalog_json(entries)),
+    ]);
     write_private(&catalog_path()?, to_json(&document).as_bytes())
 }
 

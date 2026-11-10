@@ -12,8 +12,8 @@ pub struct ServerOptions {
     /// Program and arguments that run the background scanner.
     pub daemon_command: Vec<OsString>,
     /// Program and arguments of a masked prompt that delivers to its own sink
-    /// and prints `stored`, `failed` or `cancelled`. `{name}` is replaced in
-    /// each argument. Empty disables `request_secret`.
+    /// and prints `stored`, `failed` or `cancelled`. Validated request flags are
+    /// appended to this command. Empty disables `request_secret`.
     pub ask_command: Vec<OsString>,
 }
 
@@ -75,7 +75,7 @@ fn tools(options: &ServerOptions) -> Value {
         list.push(tool(
             "request_secret",
             "Ask the user for a missing credential in a masked prompt outside the chat. Returns only stored, failed or cancelled.",
-            input_schema(["name"], true),
+            request_schema(),
         ));
     }
     Value::Array(list)
@@ -86,14 +86,25 @@ fn catalog() -> (Vec<Value>, Value) {
         Some(Value::Array(items)) => items.clone(),
         _ => Vec::new(),
     };
-    match load_catalog() {
+    let (mut secrets, scanned_at) = match load_catalog() {
         Some(document) => (
             as_list(field(&document, "secrets")),
-            field(&document, "scanned_at").cloned().unwrap_or(Value::Null),
+            field(&document, "scanned_at")
+                .cloned()
+                .unwrap_or(Value::Null),
         ),
         // First call beat the daemon's first scan.
         None => (as_list(Some(&catalog_json(&scan()))), Value::Null),
+    };
+    // New requests must be visible before the daemon's next periodic scan.
+    if let Value::Array(records) = catalog_json(&crate::request::recorded()) {
+        for record in records {
+            if !secrets.contains(&record) {
+                secrets.push(record);
+            }
+        }
     }
+    (secrets, scanned_at)
 }
 
 fn matching(secrets: Vec<Value>, query: &str) -> Vec<Value> {
@@ -111,38 +122,153 @@ fn matching(secrets: Vec<Value>, query: &str) -> Vec<Value> {
         .collect()
 }
 
-/// Letters, digits, `_` and `-` only: the name reaches a prompt's arguments.
-fn valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 128
-        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+fn request_args(arguments: &Value) -> Result<Vec<String>, String> {
+    let required = |key| {
+        string(arguments, key)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("`{key}` is required"))
+    };
+    let mut args = vec![
+        "--title".into(),
+        required("title")?,
+        "--message".into(),
+        required("message")?,
+    ];
+    for (key, flag) in [("hint", "--hint"), ("pattern", "--pattern")] {
+        if let Some(value) = field(arguments, key) {
+            let Value::String(value) = value else {
+                return Err(format!("`{key}` must be a string"));
+            };
+            args.extend([flag.into(), value.clone()]);
+        }
+    }
+    let sink = field(arguments, "sink").ok_or("`sink` is required")?;
+    let Value::Object(sink_fields) = sink else {
+        return Err("sink must be an object".into());
+    };
+    let allowed: &[&str] = match string(sink, "type") {
+        Some("file") => &["type", "path"],
+        Some("keyring") => &["type", "service", "user"],
+        Some("command") => &["type", "argv"],
+        _ => return Err("sink type must be file, keyring or command".into()),
+    };
+    if sink_fields
+        .keys()
+        .any(|key| !allowed.contains(&key.as_str()))
+    {
+        return Err("exactly one sink variant is required".into());
+    }
+    let prop = |key| {
+        string(sink, key)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("sink `{key}` is required"))
+    };
+    match string(sink, "type") {
+        Some("file") => args.extend(["--to-file".into(), prop("path")?]),
+        Some("keyring") => args.extend(["--to-keyring".into(), prop("service")?, prop("user")?]),
+        Some("command") => {
+            let Some(Value::Array(argv)) = field(sink, "argv") else {
+                return Err("sink `argv` must be an array".into());
+            };
+            args.push("--to-command".into());
+            for arg in argv {
+                let Value::String(arg) = arg else {
+                    return Err("command arguments must be strings".into());
+                };
+                args.push(arg.clone());
+            }
+        }
+        _ => return Err("sink type must be file, keyring or command".into()),
+    }
+    crate::request::Request::parse(args.clone()).map_err(|_| {
+        "A specific title, explanatory message, valid pattern and exactly one sink are required"
+            .to_string()
+    })?;
+    Ok(args)
 }
 
-fn ask(options: &ServerOptions, name: &str) -> Result<Value, String> {
-    if !valid_name(name) {
-        return Err("`name` may contain only letters, digits, `_` and `-`".to_string());
+fn ask(options: &ServerOptions, arguments: &Value) -> Result<Value, String> {
+    let args = request_args(arguments)?;
+    if crate::request::interaction_disabled() {
+        return Ok(text("failed"));
     }
-    let (program, args) = options
+    let (program, prefix) = options
         .ask_command
         .split_first()
         .ok_or("no secret prompt is configured")?;
-    let args = args
-        .iter()
-        .map(|arg| arg.to_string_lossy().replace("{name}", name));
-    // Status comes from the exit code; the prompt's output never reaches us.
+    // The child owns input, delivery, erasure and catalog registration. Never capture output.
     let status = Command::new(program)
+        .args(prefix)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .map_err(|_| "could not start the secret prompt".to_string())?;
-    let outcome = match status.code() {
+    Ok(text(match status.code() {
         Some(0) => "stored",
         Some(3) => "cancelled",
         _ => "failed",
+    }))
+}
+
+fn request_schema() -> Value {
+    let str_prop = || object([("type", text("string"))]);
+    let variant = |kind: &str, extra: Vec<(&str, Value)>| {
+        let mut fields = vec![("type", object([("const", text(kind))]))];
+        fields.extend(extra);
+        let required = Value::Array(fields.iter().map(|(key, _)| text(*key)).collect());
+        object([
+            ("type", text("object")),
+            (
+                "properties",
+                Value::Object(fields.into_iter().map(|(k, v)| (k.into(), v)).collect()),
+            ),
+            ("required", required),
+            ("additionalProperties", Value::Bool(false)),
+        ])
     };
-    Ok(object([("name", text(name)), ("status", text(outcome))]))
+    object([
+        ("type", text("object")),
+        (
+            "properties",
+            object([
+                ("title", str_prop()),
+                ("message", str_prop()),
+                ("hint", str_prop()),
+                ("pattern", str_prop()),
+                (
+                    "sink",
+                    object([(
+                        "oneOf",
+                        Value::Array(vec![
+                            variant("file", vec![("path", str_prop())]),
+                            variant(
+                                "keyring",
+                                vec![("service", str_prop()), ("user", str_prop())],
+                            ),
+                            variant(
+                                "command",
+                                vec![(
+                                    "argv",
+                                    object([
+                                        ("type", text("array")),
+                                        ("items", str_prop()),
+                                        ("minItems", Value::Unsigned(1)),
+                                    ]),
+                                )],
+                            ),
+                        ]),
+                    )]),
+                ),
+            ]),
+        ),
+        (
+            "required",
+            Value::Array(["title", "message", "sink"].into_iter().map(text).collect()),
+        ),
+        ("additionalProperties", Value::Bool(false)),
+    ])
 }
 
 fn call_tool(options: &ServerOptions, name: &str, arguments: &Value) -> Result<Value, String> {
@@ -171,7 +297,7 @@ fn call_tool(options: &ServerOptions, name: &str, arguments: &Value) -> Result<V
                 ("found", Value::Array(found)),
             ]))
         }
-        "request_secret" if !options.ask_command.is_empty() => ask(options, required()?),
+        "request_secret" if !options.ask_command.is_empty() => ask(options, arguments),
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -191,7 +317,10 @@ pub fn handle_message(options: &ServerOptions, message: &Value) -> Option<Value>
             ("capabilities", object([("tools", object([]))])),
             (
                 "serverInfo",
-                object([("name", text("lokr")), ("version", text(env!("CARGO_PKG_VERSION")))]),
+                object([
+                    ("name", text("lokr")),
+                    ("version", text(env!("CARGO_PKG_VERSION"))),
+                ]),
             ),
         ]),
         "ping" => object([]),
@@ -217,12 +346,19 @@ pub fn handle_message(options: &ServerOptions, message: &Value) -> Option<Value>
                 ("id", id),
                 (
                     "error",
-                    object([("code", Value::Signed(-32601)), ("message", text("method not found"))]),
+                    object([
+                        ("code", Value::Signed(-32601)),
+                        ("message", text("method not found")),
+                    ]),
                 ),
             ]))
         }
     };
-    Some(object([("jsonrpc", text("2.0")), ("id", id), ("result", result)]))
+    Some(object([
+        ("jsonrpc", text("2.0")),
+        ("id", id),
+        ("result", result),
+    ]))
 }
 
 /// Serves MCP on stdin/stdout and starts the background scanner.
@@ -236,7 +372,9 @@ pub fn serve_stdio(options: &ServerOptions) -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
         let line = line?;
-        let Ok(message) = parse(line.as_bytes()) else { continue };
+        let Ok(message) = parse(line.as_bytes()) else {
+            continue;
+        };
         if let Some(response) = handle_message(options, &message) {
             writeln!(stdout, "{}", to_json(&response))?;
             stdout.flush()?;

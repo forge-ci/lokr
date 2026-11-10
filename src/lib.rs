@@ -1,8 +1,10 @@
-//! Local secrets catalog for AI agents. Names and locations only: nothing in
-//! this crate returns, logs or stores a secret's value.
+//! Local secrets catalog and request bar for AI agents. Catalog operations
+//! return names and locations only; credential requests return only a status.
 
 mod daemon;
 mod mcp;
+pub mod request;
+pub mod request_ui;
 mod scan;
 
 pub use daemon::{catalog_path, ensure_daemon, load_catalog, run_daemon};
@@ -57,7 +59,12 @@ pub(crate) fn text(value: impl Into<String>) -> Value {
 
 /// A JSON object from key/value pairs.
 pub(crate) fn object<const N: usize>(pairs: [(&str, Value); N]) -> Value {
-    Value::Object(pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect::<BTreeMap<_, _>>())
+    Value::Object(
+        pairs
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect::<BTreeMap<_, _>>(),
+    )
 }
 
 /// Compact JSON text.

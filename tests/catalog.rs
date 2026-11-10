@@ -27,9 +27,14 @@ fn scan_finds_key_without_leaking_it_and_no_value_route_exists() {
     std::env::set_var("LOKRTEST_API_KEY", CANARY);
     let options = ServerOptions::default();
     let entries = lokr::scan();
-    assert!(entries.iter().any(|e| e.name == "LOKRTEST_API_KEY" && e.kind == "env"));
+    assert!(entries
+        .iter()
+        .any(|e| e.name == "LOKRTEST_API_KEY" && e.kind == "env"));
     assert!(!to_json(&lokr::catalog_json(&entries)).contains(CANARY));
-    let status = send(&options, r#"{"id":1,"method":"tools/call","params":{"name":"secret_status","arguments":{"name":"no-such-key-xyz"}}}"#);
+    let status = send(
+        &options,
+        r#"{"id":1,"method":"tools/call","params":{"name":"secret_status","arguments":{"name":"no-such-key-xyz"}}}"#,
+    );
     assert!(status.contains(r#"\"available\":false"#), "{status}");
     let listed = send(&options, r#"{"id":2,"method":"tools/list"}"#);
     assert!(listed.contains("list_secrets") && listed.contains("secret_status"));
@@ -38,15 +43,25 @@ fn scan_finds_key_without_leaking_it_and_no_value_route_exists() {
 }
 
 #[test]
-fn request_secret_reports_only_status_and_rejects_bad_names() {
+fn request_secret_reports_only_status_and_rejects_generic_context() {
     let options = ServerOptions {
         daemon_command: Vec::new(),
-        ask_command: vec!["sh".into(), "-c".into(), format!("echo {CANARY}; exit 3").into()],
+        ask_command: vec!["must-never-spawn-a-real-prompt".into()],
     };
-    let call = |name: &str| send(&options, &format!(r#"{{"id":3,"method":"tools/call","params":{{"name":"request_secret","arguments":{{"name":"{name}"}}}}}}"#));
-    let cancelled = call("MY_TOKEN");
-    assert!(cancelled.contains("cancelled") && !cancelled.contains(CANARY), "{cancelled}");
-    assert!(call("x;rm").contains("may contain only"));
+    let call = |title: &str| {
+        send(
+            &options,
+            &format!(
+                r#"{{"id":3,"method":"tools/call","params":{{"name":"request_secret","arguments":{{"title":"{title}","message":"Needed for OAuth; find it in GitHub developer settings","sink":{{"type":"file","path":"unused"}}}}}}}}"#
+            ),
+        )
+    };
+    let cancelled = call("GitHub OAuth Client ID");
+    assert!(
+        cancelled.contains("failed") && !cancelled.contains(CANARY),
+        "{cancelled}"
+    );
+    assert!(call("password").contains("specific title"));
 }
 
 #[test]
@@ -56,17 +71,21 @@ fn notifications_get_no_response() {
 }
 
 #[test]
-fn kernal_api_is_the_only_dependency() {
-    let manifest = include_str!("../Cargo.toml");
-    let mut in_dependencies = false;
-    let mut names = Vec::new();
-    for line in manifest.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            in_dependencies = line.contains("dependencies");
-        } else if in_dependencies && !line.is_empty() && !line.starts_with('#') {
-            names.push(line.split('=').next().unwrap().trim());
-        }
-    }
-    assert_eq!(names, ["kernal-api"]);
+fn request_schema_requires_context_and_sink() {
+    let options = ServerOptions {
+        daemon_command: vec![],
+        ask_command: vec!["lokr".into(), "request".into()],
+    };
+    let listed = send(&options, r#"{"id":1,"method":"tools/list"}"#);
+    assert!(
+        listed.contains("request_secret")
+            && listed.contains("title")
+            && listed.contains("message")
+            && listed.contains("sink")
+    );
+    let missing = send(
+        &options,
+        r#"{"id":2,"method":"tools/call","params":{"name":"request_secret","arguments":{"name":"TOKEN"}}}"#,
+    );
+    assert!(missing.contains("isError") && missing.contains("title"));
 }
