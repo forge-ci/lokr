@@ -37,5 +37,3 @@ targets = [
     "aarch64-pc-windows-msvc",
 ]
 
-[patch.crates-io]
-kernal-api = { path = "../kernal-api" }

@@ -1578,6 +1578,8 @@ dependencies = [
 [[package]]
 name = "kernal-api"
 version = "0.1.41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1e909f9bfb4bcdd1ca113c5e1311def07af539e69a6ebef54a18b5fd2b524ad"
 dependencies = [
  "blake3",
  "eframe",
